@@ -1,26 +1,11 @@
 from datetime import datetime
 
 from utils.constants import (
-    DEFAULT_PRIORITY,
-    DUE_DATE_FORMAT,
-    MAX_PRIORITY,
-    MAX_TITLE_LENGTH,
-    MIN_PRIORITY,
-    MIN_TITLE_LENGTH,
-    STATUS_PENDING,
-    TAG_SEPARATOR,
-    TASK_STATUSES,
+    DATE_FORMAT, DEFAULT_PRIORITY, DEFAULT_STATUS, MAX_PRIORITY, MAX_TITLE_LENGTH,
+    MIN_PRIORITY, MIN_TITLE_LENGTH, TASK_STATUSES,
 )
 from utils.errors import ValidationError
-
-INVALID_PAYLOAD = 'Dados inválidos'
-CREATE_DATE_ERROR = 'Formato de data inválido. Use YYYY-MM-DD'
-UPDATE_DATE_ERROR = 'Formato de data inválido'
-
-
-def _require_payload(data):
-    if not data or not isinstance(data, dict):
-        raise ValidationError(INVALID_PAYLOAD)
+from validators.common import is_int, optional_id, parse_int_param, require_object
 
 
 def _check_title(title):
@@ -40,52 +25,43 @@ def _check_status(status):
 
 
 def _check_priority(priority):
-    is_int = isinstance(priority, int) and not isinstance(priority, bool)
-    if not is_int or not MIN_PRIORITY <= priority <= MAX_PRIORITY:
+    if not is_int(priority) or not MIN_PRIORITY <= priority <= MAX_PRIORITY:
         raise ValidationError(f'Prioridade deve ser entre {MIN_PRIORITY} e {MAX_PRIORITY}')
     return priority
 
 
-def _parse_due_date(value, error_message):
+def _parse_date(value, message):
     try:
-        return datetime.strptime(value, DUE_DATE_FORMAT)
+        return datetime.strptime(value, DATE_FORMAT)
     except (TypeError, ValueError):
-        raise ValidationError(error_message)
+        raise ValidationError(message)
 
 
 def _normalize_tags(tags):
-    if isinstance(tags, list):
-        if not all(isinstance(tag, str) for tag in tags):
-            raise ValidationError('Tags inválidas')
-        return TAG_SEPARATOR.join(tags)
-    if tags is None or isinstance(tags, str):
-        return tags
-    raise ValidationError('Tags inválidas')
+    return ','.join(tags) if isinstance(tags, list) else tags
 
 
 def validate_task_create(data):
-    _require_payload(data)
+    require_object(data)
     title = data.get('title')
     if not title:
         raise ValidationError('Título é obrigatório')
-
     due_date = data.get('due_date')
     tags = data.get('tags')
     return {
         'title': _check_title(title),
         'description': data.get('description', ''),
-        'status': _check_status(data.get('status', STATUS_PENDING)),
+        'status': _check_status(data.get('status', DEFAULT_STATUS)),
         'priority': _check_priority(data.get('priority', DEFAULT_PRIORITY)),
-        'user_id': data.get('user_id'),
-        'category_id': data.get('category_id'),
-        'due_date': _parse_due_date(due_date, CREATE_DATE_ERROR) if due_date else None,
+        'user_id': optional_id(data.get('user_id'), 'user_id'),
+        'category_id': optional_id(data.get('category_id'), 'category_id'),
+        'due_date': _parse_date(due_date, 'Formato de data inválido. Use YYYY-MM-DD') if due_date else None,
         'tags': _normalize_tags(tags) if tags else None,
     }
 
 
 def validate_task_update(data):
-    """Return only the fields present in the payload, validated and normalized."""
-    _require_payload(data)
+    require_object(data)
     changes = {}
     if 'title' in data:
         changes['title'] = _check_title(data['title'])
@@ -96,30 +72,21 @@ def validate_task_update(data):
     if 'priority' in data:
         changes['priority'] = _check_priority(data['priority'])
     if 'user_id' in data:
-        changes['user_id'] = data['user_id']
+        changes['user_id'] = optional_id(data['user_id'], 'user_id')
     if 'category_id' in data:
-        changes['category_id'] = data['category_id']
+        changes['category_id'] = optional_id(data['category_id'], 'category_id')
     if 'due_date' in data:
         due_date = data['due_date']
-        changes['due_date'] = _parse_due_date(due_date, UPDATE_DATE_ERROR) if due_date else None
+        changes['due_date'] = _parse_date(due_date, 'Formato de data inválido') if due_date else None
     if 'tags' in data:
         changes['tags'] = _normalize_tags(data['tags'])
     return changes
 
 
-def _optional_int(value, error_message):
-    if not value:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        raise ValidationError(error_message)
-
-
-def validate_search_params(args):
+def validate_search_filters(args):
     return {
         'text': args.get('q', ''),
         'status': args.get('status', ''),
-        'priority': _optional_int(args.get('priority', ''), 'Prioridade inválida'),
-        'user_id': _optional_int(args.get('user_id', ''), 'Usuário inválido'),
+        'priority': parse_int_param(args.get('priority', ''), 'priority'),
+        'user_id': parse_int_param(args.get('user_id', ''), 'user_id'),
     }

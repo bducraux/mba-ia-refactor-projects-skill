@@ -407,6 +407,60 @@ router.get('/admin/report', requireAdmin, reportController.financial);
 ```
 Keep the route (same path/method); when the admin credential is not configured the endpoint is disabled (403). For arbitrary-SQL endpoints additionally restrict to read-only statements. List as an intentional contract change.
 
+### PB-12b Authenticate every sensitive write route from the auth finding
+
+When the project has a login, the token it issues must actually be required. The decorator/middleware goes **on the route**, for **every route listed in the authentication finding** — not as an `if` inside one handler.
+
+**Python — before** (check runs only when one field is present → anyone resets the admin's password)
+```python
+bp.add_url_rule("/accounts/<int:account_id>", view_func=controller.update, methods=["PUT"])   # no auth
+
+def update(self, account_id, changes, actor):
+    account = self._get_or_404(account_id)
+    if "role" in changes:                      # password / email / active pass unchecked
+        self._ensure_admin(actor)
+    ...
+```
+**Python — after**
+```python
+# middlewares/auth.py
+def build_require_auth(auth_service):
+    def require_auth(view):
+        @wraps(view)
+        def wrapper(*args, **kwargs):
+            g.current_user = auth_service.authenticate(bearer_token())   # raises UnauthorizedError → 401
+            return view(*args, **kwargs)
+        return wrapper
+    return require_auth
+
+# routes — every write route from the finding is wrapped
+bp.add_url_rule("/accounts/<int:account_id>", view_func=require_auth(controller.update), methods=["PUT"])
+bp.add_url_rule("/accounts/<int:account_id>", view_func=require_admin(controller.delete), methods=["DELETE"])
+
+# services/account_service.py — the rule is unconditional
+def update(self, account_id, changes, actor):
+    account = self._get_or_404(account_id)
+    if actor.id != account.id and not actor.is_admin():
+        raise ForbiddenError("Sem permissão para alterar este usuário")          # 403
+    if "role" in changes and changes["role"] != account.role and not actor.is_admin():
+        raise ForbiddenError("Apenas administradores podem alterar role")
+    ...
+```
+**JS — after**
+```js
+const requireAuth = (auth) => (req, res, next) => {
+  try { req.user = auth.authenticate(bearerToken(req)); next(); } catch (e) { next(e); }  // 401
+};
+router.put('/accounts/:id', requireAuth(auth), asyncHandler(accountController.update));
+router.delete('/accounts/:id', requireAuth(auth), requireRole('admin'), asyncHandler(accountController.remove));
+// service: if (actor.id !== account.id && actor.role !== 'admin') throw new AppError('Forbidden', 403);
+```
+Rules:
+- Sign-up (`POST /users` without privileges) may stay open, but assigning a non-default role requires an authenticated admin.
+- Routes listed in the finding that return another user's private data get the same decorator + ownership rule.
+- Every route that gains the decorator is an intentional contract change (401 without token, 403 for another non-admin user) — list each one.
+- Validate with negative calls (see SKILL.md 3.2): no token → 401; another user's token → 403; owner/admin → original status and shape.
+
 ---
 
 ## PB-13 Transactions and referential integrity

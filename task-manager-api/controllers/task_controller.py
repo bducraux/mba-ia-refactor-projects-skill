@@ -1,6 +1,6 @@
 from flask import jsonify, request
 
-from validators.task_validator import validate_search_params, validate_task_create, validate_task_update
+from validators.task_validator import validate_search_filters, validate_task_create, validate_task_update
 
 
 class TaskController:
@@ -18,6 +18,7 @@ class TaskController:
         return jsonify(self.service.create_task(fields)), 201
 
     def update_task(self, task_id):
+        self.service.get_task(task_id)  # 404 takes precedence over payload errors
         changes = validate_task_update(request.get_json())
         return jsonify(self.service.update_task(task_id, changes)), 200
 
@@ -26,7 +27,7 @@ class TaskController:
         return jsonify({'message': 'Task deletada com sucesso'}), 200
 
     def search_tasks(self):
-        filters = validate_search_params(request.args)
+        filters = validate_search_filters(request.args)
         return jsonify(self.service.search_tasks(filters)), 200
 
     def task_stats(self):

@@ -1,4 +1,6 @@
-from database import PersistenceMixin, db, transaction
+from database import db, transaction
+from models.base import PersistenceMixin
+from models.task import Task
 from utils.constants import DEFAULT_COLOR
 from utils.helpers import utcnow
 
@@ -22,11 +24,7 @@ class Category(PersistenceMixin, db.Model):
         }
 
     def delete_detaching_tasks(self):
-        """Delete the category and clear category_id of its tasks in one transaction."""
-        from models.task import Task
-
+        """Delete the category and clear it from its tasks in one transaction."""
         with transaction() as session:
-            session.execute(
-                db.update(Task).where(Task.category_id == self.id).values(category_id=None)
-            )
+            session.execute(db.update(Task).where(Task.category_id == self.id).values(category_id=None))
             session.delete(self)

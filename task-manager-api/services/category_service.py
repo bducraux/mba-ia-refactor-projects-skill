@@ -1,17 +1,15 @@
 from utils.errors import NotFoundError
 
-CATEGORY_NOT_FOUND = 'Categoria não encontrada'
-
 
 class CategoryService:
-    def __init__(self, category_model, task_model):
-        self.categories = category_model
-        self.tasks = task_model
+    def __init__(self, categories, tasks):
+        self.categories = categories
+        self.tasks = tasks
 
     def _get_or_404(self, category_id):
-        category = self.categories.find(category_id)
+        category = self.categories.get(category_id)
         if not category:
-            raise NotFoundError(CATEGORY_NOT_FOUND)
+            raise NotFoundError('Categoria não encontrada')
         return category
 
     def list_categories(self):
@@ -28,8 +26,8 @@ class CategoryService:
 
     def update_category(self, category_id, changes):
         category = self._get_or_404(category_id)
-        for name, value in changes.items():
-            setattr(category, name, value)
+        for field, value in changes.items():
+            setattr(category, field, value)
         return category.save().to_dict()
 
     def delete_category(self, category_id):

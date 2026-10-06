@@ -76,7 +76,7 @@ Feita **antes** de escrever a skill, lendo cada arquivo com número de linha (es
     ├── 02-anti-patterns-catalog.md   # 18 anti-patterns (sinais de detecção + severidade) + tabela de APIs deprecated
     ├── 03-report-template.md         # formato exato do relatório da Fase 2
     ├── 04-mvc-guidelines.md          # camadas, o que é proibido em cada uma, estrutura-alvo Flask/Express e projetos já organizados
-    └── 05-refactoring-playbook.md    # 16 transformações com código antes/depois (Python e JS)
+    └── 05-refactoring-playbook.md    # 16 transformações (+ PB-12b, auth nas rotas sensíveis) com código antes/depois (Python e JS)
 ```
 
 ### Decisões de design
@@ -114,7 +114,7 @@ Cada entrada traz **sinais de detecção concretos** (padrões de `grep -n` e o 
 | A segurança conflita com "endpoints originais respondem" (senha no JSON, `/admin/query` executando SQL). | Regra de **mudança intencional de contrato**, restrita a correções de segurança e listada na saída da Fase 3. As rotas perigosas são **protegidas por token** (`X-Admin-Token` ou Bearer admin), nunca removidas. |
 | Garantir que a Fase 2 não modifica arquivos. | Regra no SKILL.md somada a uma execução com ferramentas de escrita **bloqueadas pela própria CLI**. Testei a resposta "n" num fork da sessão: só o relatório foi criado e o `git status` do projeto ficou limpo. |
 | O relatório precisa ir para `reports/audit-project-N.md`, mas `/refactor-arch` não recebe argumento. | A skill grava em `<raiz do git>/reports/audit-<pasta>.md`, e eu renomeei para `audit-project-N.md`. |
-| Risco de a Fase 3 "consertar" a autenticação falsa do projeto 3 exigindo token em todas as rotas, o que quebraria os 22 endpoints. | As regras de contrato do SKILL.md seguraram: só `DELETE /users` e a troca de role passaram a exigir admin, e as demais rotas seguem abertas como no original (documentado). |
+| **Correção após o feedback da avaliação (projeto 3):** o HIGH de autenticação do próprio relatório dizia que qualquer um escalava privilégio, e na 1ª entrega isso continuava verdade. `PUT /users/<id>` seguia sem token, e o serviço só conferia o chamador quando o pedido trazia `role`. Bastava `PUT /users/1 {"password": "..."}` para trocar a senha do admin do seed e entrar como ele. A causa estava na skill: o AP-09 e o PB-12 pediam "no mínimo, token nas rotas de admin; documente o que fica aberto", e a regra de contrato servia de justificativa para deixar rotas abertas. | **Ajustei as referências e a Fase 3, e rodei a skill de novo no projeto 3 a partir do `baseline-original`:** (1) o catálogo (AP-09) passou a tratar como sinais as rotas de escrita sensíveis sem auth e a checagem condicional ("só confere se vier `role`"), e exige que o finding cite cada rota; (2) o novo **PB-12b** (antes/depois em Python e JS) põe o decorator **na rota**, para **toda** rota citada no finding, com regra de dono/admin **incondicional** no serviço; (3) o SKILL.md (Fase 3) tornou isso obrigatório, aceita o 401/403 como mudança intencional de contrato e ganhou **testes negativos** na validação: sem token, token de outro usuário e a tentativa explícita de trocar a senha do admin e logar com ela. Revalidei com um teste independente (19/19). Na re-execução, a própria skill avisou que o MEDIUM "Non-Atomic Writes" (`DELETE /categories`) era falso positivo: o SQLAlchemy já zerava o `category_id`. Mantive o relatório como foi gerado e registro a correção aqui. |
 | Validar sem confiar só no relato da skill. | Script de smoke **independente** (fora do repositório): 72 chamadas de sucesso e de erro gravadas no estado original e comparadas com o estado refatorado (status e formato do JSON). |
 | Falso alarme: na minha primeira validação manual do projeto 1 apareceram erros 500. | A causa era um servidor **órfão da minha própria tentativa anterior**, preso na porta 5000 com o banco apagado por baixo dele. Reproduzi em processo isolado (tudo certo), encerrei o PID, refiz o teste e passou. O smoke agora aborta se a porta já estiver ocupada. |
 | Python 3.14 local, mas as dependências estão fixadas para versões mais antigas. | Virtualenvs com Python 3.12 via `uv`. |
@@ -137,7 +137,7 @@ claude -p "y" --resume <session-id> --permission-mode acceptEdits ...           
 | --- | --- | --- |
 | 1 — code-smells-project | 12 turnos | 63 turnos |
 | 2 — ecommerce-api-legacy | 13 turnos | 51 turnos |
-| 3 — task-manager-api | 25 turnos | 63 turnos |
+| 3 — task-manager-api (re-execução após o feedback) | 21 turnos | 71 turnos |
 
 ### Findings por severidade
 
@@ -196,16 +196,16 @@ package.json                  ├── app.js                  # buildApp(): ro
 ANTES                         DEPOIS
 app.py                        app.py                      # entry point (python app.py)
 database.py                   app_factory.py              # composition root (novo)
-seed.py                       database.py                 # db + transaction() + PersistenceMixin
-models/{task,user,category}   seed.py                     # usa create_app(); senhas com hash
+seed.py                       database.py                 # db + transaction()
+models/{task,user,category}   seed.py                     # mesmos dados; senhas com hash
 routes/{task,user,report}     config/settings.py          # (novo)
-services/notification         models/{task,user,category}.py        # todo o acesso a dados (select 2.x, GROUP BY, joinedload)
+services/notification         models/{base,task,user,category}.py   # todo o acesso a dados (select 2.x, GROUP BY, eager loading)
 utils/helpers.py              services/{task,user,auth,report,category,notification}_service.py
 requirements.txt              controllers/{task,user,report,category,system}_controller.py   # (novo)
                               routes/{task,user,report,category,system}_routes.py            # só mapeamento
                               validators/{task,user,category}_validator.py                   # (novo)
-                              middlewares/{error_handler,auth}.py                            # (novo)
-                              utils/{constants,errors,helpers}.py
+                              middlewares/{error_handler,auth}.py   # (novo) require_auth / require_admin
+                              utils/{constants,errors,helpers,security,logger}.py
 ```
 </details>
 
@@ -223,6 +223,7 @@ requirements.txt              controllers/{task,user,report,category,system}_con
 | Mínimo de 5 findings | ✅ 17 | ✅ 16 | ✅ 17 |
 | Detecção de APIs deprecated (se aplicável) | ✅ n/a (declarado) | ✅ 1 | ✅ 3 |
 | Pausa e pede confirmação antes da Fase 3 | ✅ (testado com "n") | ✅ | ✅ |
+| Rotas citadas no finding de auth exigem token (testes negativos) | n/a (sem login com token; rotas admin via `X-Admin-Token`) | n/a (idem) | ✅ 4/4 rotas; ataque do feedback → 401 |
 | **Fase 3** — Estrutura de diretórios MVC | ✅ | ✅ | ✅ |
 | Config extraída (sem hardcoded) | ✅ `src/config/settings.py` + `.env.example` | ✅ `src/config/index.js` + `.env.example` | ✅ `config/settings.py` + `.env.example` |
 | Models abstraem os dados | ✅ | ✅ | ✅ |
@@ -231,7 +232,7 @@ requirements.txt              controllers/{task,user,report,category,system}_con
 | Error handling centralizado | ✅ | ✅ | ✅ |
 | Entry point claro | ✅ `python app.py` | ✅ `npm start` | ✅ `python app.py` |
 | Aplicação inicia sem erros | ✅ | ✅ | ✅ |
-| Endpoints originais respondem | ✅ 28/33 idênticos + 5 mudanças intencionais | ✅ 5/7 idênticos + 2 intencionais | ✅ 27/32 idênticos + 5 intencionais |
+| Endpoints originais respondem | ✅ 28/33 idênticos + 5 mudanças intencionais | ✅ 5/7 idênticos + 2 intencionais | ✅ 24/32 idênticos + 8 intencionais (auth) |
 
 ### Validação independente: endpoints antes × depois
 
@@ -241,7 +242,7 @@ Smoke próprio, fora do repositório, rodado com banco zerado no estado original
 | --- | --- | --- |
 | 1 | `GET /health` sem `secret_key`/`db_path`/`debug`; `GET /usuarios`, `/usuarios/1` sem `senha`; `POST /admin/query` e `/admin/reset-db` → 403 sem `X-Admin-Token` | Com token: `SELECT` → 200; `DELETE` via `/admin/query` → 400 (somente leitura); token errado → 403; SQL injection no login → 401 |
 | 2 | `GET /api/admin/financial-report` e `DELETE /api/users/:id` → 403 sem `X-Admin-Token` | Com token: relatório 200 com o mesmo JSON; DELETE 200 apagando também matrículas e pagamentos; token errado → 403 |
-| 3 | `password` (hash) removido de `GET /users/1`, `POST /users`, `PUT /users/2`, `POST /login`; `DELETE /users/3` → 401 sem token | Token de admin (do `/login`) → 200; token de usuário comum → 403; token antigo `fake-jwt-token-1` → 401 |
+| 3 | `GET /users/<id>`, `PUT /users/<id>`, `POST /users` e `DELETE /users/<id>` → 401 sem token (rotas citadas no HIGH de autenticação); `password` (hash) removido de `POST /login` e das respostas de usuário | Teste de auth independente (fora do repositório), 19/19: `PUT /users/1` trocando senha/email/role/active do admin sem token → 401, e o login com a senha forjada → 401 (a original continua valendo); token forjado `fake-jwt-token-1` → 401; token de outro usuário → 403; usuário comum mudando o próprio `role` → 403; dono ou admin → 200 sem `password` |
 
 ### Logs das aplicações refatoradas rodando
 
@@ -269,15 +270,17 @@ Projeto 3 (`python seed.py && python app.py`):
  * Serving Flask app 'app_factory'
  * Debug mode: off
  * Running on http://127.0.0.1:5000
+WARNING app_factory: SECRET_KEY not set; using the development default (do not use in production)
 [smoke] boot=OK | 32 chamadas | 32 com status < 500
 (0 DeprecationWarning / LegacyAPIWarning no log)
+[auth_p3] 19/19 cenários OK — TUDO OK
 ```
 
 ### Como a skill se comportou em stacks diferentes
 
 - **Monólito Python (P1):** criou toda a estrutura em `src/` e manteve `app.py` como bootstrap fino, de modo que o comando de start não mudou. Migrou as senhas em texto puro de um banco existente para hash na inicialização.
 - **Node/Express (P2):** trocou o callback hell por um wrapper promisificado com `async/await` e transação explícita, e transformou o N+1 do relatório em um único `LEFT JOIN` que mantém o JSON original. Preservou as respostas em texto puro (`"Bad Request"`, `"Curso não encontrado"`) que o original usava.
-- **Flask parcialmente organizado (P3):** **não reescreveu**. Manteve `models/`, `routes/`, `services/` e `utils/` na raiz, adicionou `config/`, `controllers/`, `validators/`, `middlewares/` e `app_factory.py`, moveu o acesso a dados para os models (`select` 2.x, `GROUP BY`, `joinedload`) e substituiu as APIs deprecated.
+- **Flask parcialmente organizado (P3):** **não reescreveu**. Manteve `models/`, `routes/`, `services/` e `utils/` na raiz, adicionou `config/`, `controllers/`, `validators/`, `middlewares/` e `app_factory.py`, moveu o acesso a dados para os models (`select` 2.x, `GROUP BY`, `joinedload`) e substituiu as APIs deprecated. Na re-execução, pôs `require_auth`/`require_admin` nas 4 rotas citadas no finding de autenticação e validou sozinha o ataque de tomada de conta (26/26 checagens próprias).
 - Nos 3 projetos, a skill identificou o domínio e a versão do framework pelos arquivos de manifest e lock, e não pelo nome da pasta.
 
 ---
@@ -323,7 +326,8 @@ ADMIN_TOKEN=troque-me npm start                     # habilita relatório financ
 cd task-manager-api && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python seed.py && .venv/bin/python app.py
 curl localhost:5000/tasks && curl localhost:5000/reports/summary
-# token de admin: POST /login com joao@email.com / 1234 → usar "Authorization: Bearer <token>" em DELETE /users/<id>
+# token: POST /login (admin do seed: joao@email.com / 1234) → "Authorization: Bearer <token>"
+# exigido em GET/PUT/DELETE /users/<id> e POST /users (dono ou admin; role, active, criação e DELETE só admin)
 ```
 
 Cada projeto tem um `.env.example` com todas as variáveis. Sem `.env`, as aplicações sobem com defaults seguros de desenvolvimento: debug desligado e rotas administrativas desabilitadas.

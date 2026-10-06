@@ -1,12 +1,9 @@
-from sqlalchemy.exc import IntegrityError
-from werkzeug.security import check_password_hash, generate_password_hash
-
-from database import PersistenceMixin, db, transaction
-from utils.constants import ROLE_ADMIN, ROLE_USER
-from utils.errors import ConflictError
+from database import db, transaction
+from models.base import PersistenceMixin
+from models.task import Task
+from utils.constants import DEFAULT_ROLE, ROLE_ADMIN
 from utils.helpers import utcnow
-
-DUPLICATE_EMAIL_MESSAGE = 'Email já cadastrado'
+from utils.security import hash_password, is_legacy_hash, verify_password
 
 
 class User(PersistenceMixin, db.Model):
@@ -16,12 +13,12 @@ class User(PersistenceMixin, db.Model):
     name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(50), default=ROLE_USER)
+    role = db.Column(db.String(50), default=DEFAULT_ROLE)
     active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=utcnow)
 
     def to_dict(self):
-        """Public representation: the password hash is never exposed."""
+        """Public representation: never includes the password hash."""
         return {
             'id': self.id,
             'name': self.name,
@@ -32,28 +29,23 @@ class User(PersistenceMixin, db.Model):
         }
 
     def set_password(self, raw_password):
-        self.password = generate_password_hash(raw_password)
+        self.password = hash_password(raw_password)
 
     def check_password(self, raw_password):
-        return check_password_hash(self.password, raw_password)
+        return verify_password(self.password, raw_password)
+
+    def has_legacy_password_hash(self):
+        return is_legacy_hash(self.password)
 
     def is_admin(self):
         return self.role == ROLE_ADMIN
 
     @classmethod
-    def find_by_email(cls, email):
-        return db.session.execute(db.select(cls).filter_by(email=email)).scalar_one_or_none()
-
-    def save(self):
-        try:
-            return super().save()
-        except IntegrityError as exc:
-            raise ConflictError(DUPLICATE_EMAIL_MESSAGE) from exc
+    def get_by_email(cls, email):
+        return db.session.scalars(db.select(cls).filter_by(email=email)).first()
 
     def delete_with_tasks(self):
-        """Delete the user and all tasks assigned to them in one transaction."""
-        from models.task import Task
-
+        """Delete the user and every task assigned to them in one transaction."""
         with transaction() as session:
             session.execute(db.delete(Task).where(Task.user_id == self.id))
             session.delete(self)

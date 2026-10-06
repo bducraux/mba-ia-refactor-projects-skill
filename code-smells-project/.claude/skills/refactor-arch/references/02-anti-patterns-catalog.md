@@ -123,8 +123,12 @@ How to use: for each entry run the **detection signals** over the source files (
 **Detection signals**
 - Login returning predictable tokens (a fixed prefix + user id, the user id itself) or no token at all while protected-looking routes exist.
 - Admin or "other users' data" routes with no auth check.
+- **Sensitive write routes reachable anonymously**: any route that creates, updates or deletes an account, or changes a password, email, role/permission or active flag (`PUT/PATCH /users/<id>`, `DELETE /users/<id>`, `POST /users` accepting a role, password-change routes) with no credential check at route level.
+- **Conditional authorization**: the caller is checked only when a particular field is in the payload (`if "role" in data: check_admin()`), so the same route changes the password or email of any account — including an admin's — without a token. This is an account-takeover path: treat it as part of this finding, never as "already protected".
 
-**Recommendation:** PB-12 (minimum: admin credential/token from config for admin routes; document what remains open). Do not invent a full auth system unless required to fix a CRITICAL finding.
+When reporting, list **every** such route in `File:` (each handler/route declaration line) and name them in the Description as `METHOD /path` — Phase 3 protects exactly this list.
+
+**Recommendation:** PB-12. If the project has a login that identifies users, issue a signed token and put an authentication decorator/middleware **on every route listed in the finding**, with an ownership rule (the caller acts on their own account, or is an admin) and admin-only for role/permission changes and deletions. If there is no user login at all, require an admin credential from config on the listed write routes. Do not leave a listed write route open "to preserve the contract" — closing it is an intentional contract change.
 
 ---
 

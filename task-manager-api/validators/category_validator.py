@@ -1,13 +1,16 @@
-from utils.constants import DEFAULT_COLOR
+import re
+
+from utils.constants import COLOR_PATTERN, DEFAULT_COLOR
 from utils.errors import ValidationError
-from utils.helpers import is_valid_color
+from validators.common import require_object
 
-INVALID_PAYLOAD = 'Dados inválidos'
+_COLOR_RE = re.compile(COLOR_PATTERN)
 
 
-def _require_payload(data):
-    if not data or not isinstance(data, dict):
-        raise ValidationError(INVALID_PAYLOAD)
+def _check_color(color):
+    if not isinstance(color, str) or not _COLOR_RE.match(color):
+        raise ValidationError('Cor inválida')
+    return color
 
 
 def _check_name(name):
@@ -16,14 +19,8 @@ def _check_name(name):
     return name
 
 
-def _check_color(color):
-    if not is_valid_color(color):
-        raise ValidationError('Cor inválida')
-    return color
-
-
 def validate_category_create(data):
-    _require_payload(data)
+    require_object(data)
     return {
         'name': _check_name(data.get('name')),
         'description': data.get('description', ''),
@@ -32,7 +29,7 @@ def validate_category_create(data):
 
 
 def validate_category_update(data):
-    _require_payload(data)
+    require_object(data, allow_empty=True)
     changes = {}
     if 'name' in data:
         changes['name'] = _check_name(data['name'])

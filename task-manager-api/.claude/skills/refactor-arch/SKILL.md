@@ -110,13 +110,14 @@ Apply the target structure from `04-mvc-guidelines.md` for the detected stack, u
 - **Routes/Views** only map `METHOD /path` → controller.
 - **Centralized error handling** (one error handler/middleware; controllers raise/throw domain errors instead of formatting 500s themselves).
 - **Clear entry point / composition root** that builds config → db → models/services → controllers → routes → app.
+- **Authentication covers the whole auth finding.** If the report has an authentication/authorization finding (AP-09), take the list of routes it cites and wrap **each one** with the auth decorator/middleware at route level (PB-12b) — every sensitive write route (create/update/delete account, password, email, role, active flag) and every cited read of another user's private data. Authorization inside the service is unconditional (caller is the owner or an admin; role changes and deletions admin-only), never a check that runs only when a certain field is in the payload. "Contract preservation" is not a reason to leave a cited route open.
 
 **Contract preservation (non-negotiable):**
 
 - Keep **every original route** with the same path and HTTP method, the same success and error **status codes**, and the same **response body shape** (same keys, same envelope, same content type).
 - Keep the **original start command and port** working (e.g. `python app.py`, `npm start`): if you move code, leave the original entry file as a thin bootstrap or update the start script accordingly.
 - Keep seed/sample data behavior so the app starts with the same data.
-- **Intentional contract changes are allowed only to remove a security vulnerability** — e.g. stop returning passwords/hashes/secrets in a response, or require an admin credential (from config) for an endpoint that executes arbitrary SQL/code or destroys data. Never silently delete a route. Every intentional change must be listed in the final output under "Intentional contract changes".
+- **Intentional contract changes are allowed only to remove a security vulnerability** — e.g. stop returning passwords/hashes/secrets in a response, require an admin credential (from config) for an endpoint that executes arbitrary SQL/code or destroys data, or require authentication (401/403) on the routes cited in an authentication finding. Never silently delete a route. Every intentional change must be listed in the final output under "Intentional contract changes".
 - If the project is already partially layered, **evolve** the existing structure (add the missing layers, move logic out of routes, fix issues in place). Do not rewrite what is already correct.
 
 Do not add new third-party dependencies unless a finding cannot be fixed without one (e.g. a password-hashing library); prefer the standard library or what the framework already provides (e.g. `werkzeug.security` in Flask, `crypto.scrypt` in Node).
@@ -127,7 +128,8 @@ Do not add new third-party dependencies unless a finding cannot be fixed without
 2. Boot the refactored app with the **original start command**; confirm it starts without errors (check the process output).
 3. Call every endpoint from the Phase 1 inventory again with the same inputs used in 3.0 and compare with the baseline: same status code and same top-level keys, except for the listed intentional contract changes.
 4. Re-run the detection signals from the catalog (`grep -n`) over the new code to confirm that the reported anti-patterns are gone.
-5. If anything fails, fix it and validate again. Stop the app and leave the working tree with no stray processes, temp files or generated databases.
+5. **Auth negative tests** (when the report has an AP-09 finding): for every route cited in it call (a) with no credential → expect 401/403, (b) with a valid token of a different non-admin user → expect 403, (c) as the owner or admin → expect the original status and shape. Then try the takeover explicitly: change another account's password (e.g. the seeded admin's) without a token, then log in with the new password — both must fail and the original password must still work. Any route that accepts the anonymous write is a failure: fix it and validate again.
+6. If anything fails, fix it and validate again. Stop the app and leave the working tree with no stray processes, temp files or generated databases.
 
 Then print exactly this block:
 
@@ -145,6 +147,7 @@ PHASE 3: REFACTORING COMPLETE
   ✓ Application boots without errors (<start command>)
   ✓ All endpoints respond correctly (<N>/<N> match the baseline)
   ✓ Zero anti-patterns remaining (<how this was checked>)
+  ✓ Auth enforced on <N>/<N> routes from the auth finding (anonymous → 401, other user → 403; takeover attempt rejected) — or "No auth finding"
 ================================
 ```
 

@@ -1,6 +1,4 @@
 class AppError(Exception):
-    """Domain error mapped to an HTTP status by the central error handler."""
-
     status = 500
 
     def __init__(self, message, status=None):

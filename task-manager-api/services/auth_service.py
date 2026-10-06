@@ -1,45 +1,36 @@
-from itsdangerous import BadSignature
+import logging
 
 from utils.errors import ForbiddenError, UnauthorizedError
 
-INVALID_CREDENTIALS = 'Credenciais inválidas'
+logger = logging.getLogger(__name__)
 
 
 class AuthService:
-    """Login and signed, expiring session tokens (itsdangerous serializer injected by the composition root)."""
-
-    def __init__(self, user_model, serializer, token_max_age):
-        self.users = user_model
-        self.serializer = serializer
-        self.token_max_age = token_max_age
+    def __init__(self, users, token_signer):
+        self.users = users
+        self.token_signer = token_signer
 
     def login(self, email, password):
-        user = self.users.find_by_email(email)
+        user = self.users.get_by_email(email)
         if not user or not user.check_password(password):
-            raise UnauthorizedError(INVALID_CREDENTIALS)
+            raise UnauthorizedError('Credenciais inválidas')
         if not user.active:
             raise ForbiddenError('Usuário inativo')
+        if user.has_legacy_password_hash():
+            user.set_password(password)
+            user.save()
+            logger.info('Upgraded legacy password hash: user id=%s', user.id)
         return {
             'message': 'Login realizado com sucesso',
             'user': user.to_dict(),
-            'token': self.serializer.dumps({'user_id': user.id}),
+            'token': self.token_signer.sign(user.id),
         }
 
-    def resolve_user(self, token):
-        """Return the active user that owns a valid token, or None."""
+    def authenticate(self, token):
         if not token:
-            return None
-        try:
-            payload = self.serializer.loads(token, max_age=self.token_max_age)
-        except BadSignature:
-            return None
-        user = self.users.find(payload.get('user_id'))
-        return user if user and user.active else None
-
-    def require_admin(self, token):
-        user = self.resolve_user(token)
-        if user is None:
-            raise UnauthorizedError('Token inválido ou ausente')
-        if not user.is_admin():
-            raise ForbiddenError('Acesso negado')
+            raise UnauthorizedError('Token de autenticação ausente')
+        user_id = self.token_signer.read(token)
+        user = self.users.get(user_id) if user_id is not None else None
+        if not user or not user.active:
+            raise UnauthorizedError('Token inválido ou expirado')
         return user

@@ -1,13 +1,14 @@
 from datetime import datetime
 
+from flask import jsonify
+
+API_NAME = 'Task Manager API'
+API_VERSION = '1.0'
+
 
 class SystemController:
-    def __init__(self, app_name, version):
-        self.app_name = app_name
-        self.version = version
+    def health(self):
+        return jsonify({'status': 'ok', 'timestamp': str(datetime.now())})
 
     def index(self):
-        return {'message': self.app_name, 'version': self.version}
-
-    def health(self):
-        return {'status': 'ok', 'timestamp': str(datetime.now())}
+        return jsonify({'message': API_NAME, 'version': API_VERSION})
